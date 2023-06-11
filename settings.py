@@ -55,11 +55,11 @@ class Settings:
     STORAGE_CONFIG = {}
     # Banners
     BANNERS = [{
-        'text': 'FileCodeBox',
+        'text': 'BoFileCabinet',
         'url': 'https://github.com/666zhaobo666/BoFileCabinet',
         'src': '/static/banners/img_1.png'
     }, {
-        'text': 'LanBlog',
+        'text': 'BOGE影视',
         'url': 'https://movie.cccg.shop',
         'src': '/static/banners/img_2.png'
     }]
