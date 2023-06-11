@@ -2,21 +2,22 @@ import asyncio
 import datetime
 import uuid
 from pathlib import Path
+
+from pydantic import BaseModel
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, FileResponse
+from starlette.responses import HTMLResponse, FileResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles
-import os
-import shutil
-from core.utils import error_ip_limit, upload_ip_limit, get_code, storage, delete_expire_files
+from core.utils import error_ip_limit, upload_ip_limit, get_code, storage, delete_expire_files, get_token, \
+    get_expire_info
 from core.depends import admin_required
-from fastapi import FastAPI, Depends, UploadFile, Form, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Depends, UploadFile, Form, File, HTTPException, BackgroundTasks, Header
 from core.database import init_models, Options, Codes, get_session
 from settings import settings
 
 # 实例化FastAPI
-app = FastAPI(debug=settings.DEBUG, redoc_url=None, docs_url=None, openapi_url=None)
+app = FastAPI(debug=settings.DEBUG, redoc_url=None, )
 
 
 @app.on_event('startup')
@@ -31,10 +32,6 @@ async def startup(s: AsyncSession = Depends(get_session)):
 DATA_ROOT = Path(settings.DATA_ROOT)
 if not DATA_ROOT.exists():
     DATA_ROOT.mkdir(parents=True)
-# 本地文件文件夹
-LOCAL_ROOT = Path(settings.LOCAL_ROOT)
-if not LOCAL_ROOT.exists():
-    LOCAL_ROOT.mkdir(parents=True)
 
 # 静态文件夹，这个固定就行了，静态资源都放在这里
 app.mount('/static', StaticFiles(directory='./static'), name="static")
@@ -48,50 +45,23 @@ admin_html = open('templates/admin.html', 'r', encoding='utf-8').read()
 @app.get('/')
 async def index():
     return HTMLResponse(
-        index_html.replace('{{title}}', settings.TITLE).replace('{{description}}', settings.DESCRIPTION).replace(
-            '{{keywords}}', settings.KEYWORDS).replace("'{{fileSizeLimit}}'", str(settings.FILE_SIZE_LIMIT))
+        index_html
+        .replace('{{title}}', settings.TITLE)
+        .replace('{{description}}', settings.DESCRIPTION)
+        .replace('{{keywords}}', settings.KEYWORDS)
+        .replace("'{{fileSizeLimit}}'", str(settings.FILE_SIZE_LIMIT))
     )
 
 
 @app.get(f'/{settings.ADMIN_ADDRESS}', description='管理页面')
 async def admin():
     return HTMLResponse(
-        admin_html.replace('{{title}}', settings.TITLE).replace('{{description}}', settings.DESCRIPTION).replace(
-            '{{admin_address}}', settings.ADMIN_ADDRESS).replace('{{keywords}}', settings.KEYWORDS)
+        admin_html
+        .replace('{{title}}', settings.TITLE)
+        .replace('{{description}}', settings.DESCRIPTION)
+        .replace('{{admin_address}}', settings.ADMIN_ADDRESS)
+        .replace('{{keywords}}', settings.KEYWORDS)
     )
-
-
-@app.get(f'/{settings.ADMIN_ADDRESS}/files', dependencies=[Depends(admin_required)])
-async def get_files():
-    files = []
-    for i, j, k in os.walk(f'{LOCAL_ROOT}'):
-        files.extend([{'name': _.split('/')[-1], 'path': i} for _ in k])
-    return {'data': files}
-
-
-@app.post(f'/{settings.ADMIN_ADDRESS}/files', dependencies=[Depends(admin_required)])
-async def share_file(name=Form(...), path=File(...), s: AsyncSession = Depends(get_session)):
-    file_path = path + f'/{name}'
-    key = uuid.uuid4().hex
-    code = await get_code(s)
-    now = datetime.datetime.now()
-    path = f"{settings.LOCAL_ROOT}/upload/{now.year}/{now.month}/{now.day}/"
-    if not os.path.exists(path):
-        os.makedirs(path)
-    text = f"{path}/{f'{key}{name}'}"
-    exp_time = datetime.datetime.now() + datetime.timedelta(days=1)
-    s.add(Codes(code=code, text=text.replace(f'{settings.LOCAL_ROOT}/', ''), type='file', name=name, count=-1,
-                exp_time=exp_time, key=key))
-    await s.commit()
-    shutil.move(file_path, text)
-    return {
-        'detail': '分享成功！请在24小时内使用分享使用！',
-        'data': {
-            'code': code,
-            'text': text,
-            'name': name,
-        }
-    }
 
 
 @app.post(f'/{settings.ADMIN_ADDRESS}', dependencies=[Depends(admin_required)], description='查询数据库列表')
@@ -164,12 +134,12 @@ async def index(code: str, ip: str = Depends(error_ip_limit), s: AsyncSession = 
     if not info:
         error_count = settings.ERROR_COUNT - error_ip_limit.add_ip(ip)
         raise HTTPException(status_code=404, detail=f"取件码错误，{error_count}次后将被禁止{settings.ERROR_MINUTE}分钟")
-    if info.exp_time < datetime.datetime.now() or info.count == 0:
+    if (info.exp_time and info.exp_time < datetime.datetime.now()) or info.count == 0:
         raise HTTPException(status_code=404, detail="取件码已失效，请联系寄件人")
     await s.execute(update(Codes).where(Codes.id == info.id).values(count=info.count - 1))
     await s.commit()
     if info.type != 'text':
-        info.text = await storage.get_url(info)
+        info.text = f'/select?code={info.code}&token={await get_token(code, ip)}'
     return {
         'detail': f'取件成功，请立即下载，避免失效！',
         'data': {'type': info.type, 'text': info.text, 'name': info.name, 'code': info.code}
@@ -178,7 +148,6 @@ async def index(code: str, ip: str = Depends(error_ip_limit), s: AsyncSession = 
 
 @app.get('/banner')
 async def banner(request: Request):
-    # 数据库查询config
     return {
         'detail': '查询成功',
         'data': settings.BANNERS,
@@ -187,7 +156,11 @@ async def banner(request: Request):
 
 
 @app.get('/select')
-async def get_file(code: str, ip: str = Depends(error_ip_limit), s: AsyncSession = Depends(get_session)):
+async def get_file(code: str, token: str, ip: str = Depends(error_ip_limit), s: AsyncSession = Depends(get_session)):
+    # 验证token
+    if token != await get_token(code, ip):
+        error_ip_limit.add_ip(ip)
+        raise HTTPException(status_code=403, detail="口令错误，或已过期，次数过多将被禁止访问")
     # 查出数据库记录
     query = select(Codes).where(Codes.code == code)
     info = (await s.execute(query)).scalars().first()
@@ -199,38 +172,66 @@ async def get_file(code: str, ip: str = Depends(error_ip_limit), s: AsyncSession
     if info.type == 'text':
         return {'detail': '查询成功', 'data': info.text}
     # 如果是文件，返回文件
+    elif storage.NAME != 'filesystem':
+        # 重定向到文件存储服务器
+        return RedirectResponse(await storage.get_url(info))
     else:
         filepath = await storage.get_filepath(info.text)
         return FileResponse(filepath, filename=info.name)
 
 
-@app.post('/share', dependencies=[Depends(admin_required)], description='分享文件')
-async def share(background_tasks: BackgroundTasks, text: str = Form(default=None),
-                style: str = Form(default='2'), value: int = Form(default=1), file: UploadFile = File(default=None),
-                ip: str = Depends(upload_ip_limit), s: AsyncSession = Depends(get_session)):
-    code = await get_code(s)
-    if style == '2':
-        if value > settings.MAX_DAYS:
-            raise HTTPException(status_code=400, detail=f"最大有效天数为{settings.MAX_DAYS}天")
-        exp_time = datetime.datetime.now() + datetime.timedelta(days=value)
-        exp_count = -1
-    elif style == '1':
-        if value < 1:
-            raise HTTPException(status_code=400, detail="最小有效次数为1次")
-        exp_time = datetime.datetime.now() + datetime.timedelta(days=1)
-        exp_count = value
-    else:
-        exp_time = datetime.datetime.now() + datetime.timedelta(days=1)
-        exp_count = -1
-    key = uuid.uuid4().hex
-    if file:
-        size = await storage.get_size(file)
-        if size > settings.FILE_SIZE_LIMIT:
-            raise HTTPException(status_code=400, detail="文件过大")
-        _text, _type, name = await storage.get_text(file, key), file.content_type, file.filename
-        background_tasks.add_task(storage.save_file, file, _text)
-    else:
-        size, _text, _type, name = len(text), text, 'text', '文本分享'
+@app.post('/file/create/')
+async def create_file():
+    # 生成随机字符串
+    return {'code': 200, 'data': await storage.create_upload_file()}
+
+
+@app.post('/file/upload/{file_key}/')
+async def upload_file(file_key: str, file: bytes = File(...), chunk_index: int = Form(...),
+                      total_chunks: int = Form(...)):
+    await storage.save_chunk_file(file_key, file, chunk_index, total_chunks)
+    return {'code': 200}
+
+
+@app.get('/file/merge/{file_key}/')
+async def merge_chunks(file_key: str, file_name: str, total_chunks: int):
+    return {'code': 200, 'data': await storage.merge_chunks(file_key, file_name, total_chunks)}
+
+
+class ShareDataModel(BaseModel):
+    text: str
+    size: int = 0
+    exp_style: str
+    exp_value: int
+    type: str
+    name: str
+    key: str = uuid.uuid4
+
+
+@app.post('/share/file/', dependencies=[Depends(admin_required)], description='分享文件')
+async def share_file(file_model: ShareDataModel, s: AsyncSession = Depends(get_session),
+                     ip: str = Depends(error_ip_limit)):
+    exp_error, exp_time, exp_count, code = await get_expire_info(file_model.exp_style, file_model.exp_value, s)
+    if exp_error:
+        raise HTTPException(status_code=400, detail='过期值异常')
+    s.add(Codes(code=code, text=file_model.text, size=file_model.size, type=file_model.type, name=file_model.name,
+                count=exp_count, exp_time=exp_time, key=file_model.key))
+    await s.commit()
+    upload_ip_limit.add_ip(ip)
+    return {
+        'detail': '分享成功，请点击我的文件按钮查看上传列表',
+        'data': {'code': code, 'key': file_model.key, 'name': file_model.name}
+    }
+
+
+@app.post('/share/text/', dependencies=[Depends(admin_required)])
+async def share_text(text_model: ShareDataModel, s: AsyncSession = Depends(get_session),
+                     ip: str = Depends(error_ip_limit)):
+    exp_error, exp_time, exp_count, code = await get_expire_info(text_model.exp_style, text_model.exp_value, s, )
+    if exp_error:
+        raise HTTPException(status_code=400, detail='过期值异常')
+    exp_status, exp_time, exp_count, code = await get_expire_info(text_model.exp_style, text_model.exp_value, s)
+    size, _text, _type, name, key = len(text_model.text), text_model.text, 'text', '文本分享', text_model.key().hex
     s.add(Codes(code=code, text=_text, size=size, type=_type, name=name, count=exp_count, exp_time=exp_time, key=key))
     await s.commit()
     upload_ip_limit.add_ip(ip)

@@ -8,7 +8,7 @@ config = Config("data/.env")
 
 class Settings:
     # 项目版本
-    VERSION: str = config("VERSION", default="1.0")
+    VERSION: str = config("VERSION", default="1.1")
     # 是否开启DEBUG模式
     DEBUG = config('DEBUG', cast=bool, default=False)
     # 端口
@@ -18,9 +18,7 @@ class Settings:
     # Sqlite套接字
     DATABASE_URL = config('DATABASE_URL', cast=str, default=f"sqlite+aiosqlite:///{DATABASE_FILE}")
     # 数据存储文件夹，文件就不暴露在静态资源里面了
-    DATA_ROOT = './data/' + config('DATA_ROOT', cast=str, default=f"static")
-    # 本地文件夹
-    LOCAL_ROOT = './data/' + config('LOCAL_ROOT', cast=str, default=f"local")
+    DATA_ROOT = config('DATA_ROOT', cast=str, default=f"./data/static")
     # 静态文件夹URL
     STATIC_URL = config('STATIC_URL', cast=str, default="/static")
     # 开启上传
@@ -33,6 +31,8 @@ class Settings:
     ERROR_MINUTE = config('ERROR_MINUTE', cast=int, default=10)
     # 上传次数
     UPLOAD_COUNT = config('UPLOAD_COUNT', cast=int, default=60)
+    # 是否允许永久保存
+    ENABLE_PERMANENT = config('ENABLE_PERMANENT', cast=bool, default=True)
     # 上传限制分钟数
     UPLOAD_MINUTE = config('UPLOAD_MINUTE', cast=int, default=1)
     # 删除过期文件的间隔（分钟）
@@ -42,7 +42,7 @@ class Settings:
     # 管理密码
     ADMIN_PASSWORD = config('ADMIN_PASSWORD', cast=str, default=uuid.uuid4().hex)
     # 文件大小限制，默认10MB
-    FILE_SIZE_LIMIT = config('FILE_SIZE_LIMIT', cast=int, default=10) * 1024 * 1024
+    FILE_SIZE_LIMIT = config('FILE_SIZE_LIMIT', cast=int, default=10 * 1024 * 1024)
     # 网站标题
     TITLE = config('TITLE', cast=str, default="文件快递柜")
     # 网站描述

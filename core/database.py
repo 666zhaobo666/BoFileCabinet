@@ -45,7 +45,6 @@ async def init_models(s):
                 {'key': 'DATABASE_FILE', 'value': settings.DATABASE_FILE},
                 {'key': 'PORT', 'value': settings.PORT},
                 {'key': 'DATA_ROOT', 'value': settings.DATA_ROOT},
-                {'key': 'LOCAL_ROOT', 'value': settings.LOCAL_ROOT},
                 {'key': 'STATIC_URL', 'value': settings.STATIC_URL},
                 {'key': 'BANNERS', 'value': settings.BANNERS},
                 {'key': 'ENABLE_UPLOAD', 'value': settings.ENABLE_UPLOAD},
@@ -70,7 +69,7 @@ async def init_models(s):
                 f'您的后台地址为：/{settings.ADMIN_ADDRESS}\n'
                 f'您的管理员密码为：{settings.ADMIN_PASSWORD}\n'
                 f'请尽快修改后台信息！\n'
-                f'BoFileCabinet https://github.com/666zhaobo666/BoFileCabinet'
+                f'FileCodeBox https://github.com/vastsa/FileCodeBox'
             )
         await settings.updates(await conn.execute(select(Options).filter()))
 
